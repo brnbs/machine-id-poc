@@ -1,10 +1,21 @@
 using DeviceId;
 using DeviceId.Linux;
+using MachineIdPoc;
 using MachineIdPoc.Components;
 
 Console.WriteLine("=== Machine ID PoC ===");
 Console.WriteLine($"Container hostname : {Environment.MachineName}");
 Console.WriteLine();
+
+// ── Docker detection ─────────────────────────────────────────────────────────
+var detection = DockerDetector.Detect();
+if (detection.IsDocker)
+    Console.WriteLine($"[OK  ] Running inside a Docker container ({detection.Signal})");
+else
+    Console.WriteLine($"[WARN] NOT running inside a Docker container ({detection.Signal})");
+Console.WriteLine("      Device ID will only be host-unique when running in Docker.");
+Console.WriteLine();
+
 Console.WriteLine("--- Component diagnostics ---");
 
 // ArpGatewayMacComponent caches its value so GetValue() can be called by
