@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+
+# escape=`
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/sdk:8.0-windowsservercore-ltsc2025 AS build
+WORKDIR C:/src
+
+COPY MachineIdPoc/MachineIdPoc.csproj .
+RUN dotnet restore
+
+COPY MachineIdPoc/ .
+RUN dotnet publish -c Release -r win-x64 --self-contained -o C:/app
+
+# ── Stage 2: Runtime (no .NET runtime needed — self-contained) ────────────────
+FROM mcr.microsoft.com/windows/servercore:ltsc2025
+WORKDIR C:/app
+COPY --from=build C:/app .
+ENTRYPOINT ["MachineIdPoc.exe"]

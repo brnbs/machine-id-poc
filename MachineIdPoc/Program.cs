@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using DeviceId;
 using DeviceId.Linux;
 using MachineIdPoc;
@@ -8,11 +9,26 @@ Console.WriteLine($"Container hostname : {Environment.MachineName}");
 Console.WriteLine();
 
 // ── Docker detection ─────────────────────────────────────────────────────────
-var detection = DockerDetector.Detect();
-if (detection.IsDocker)
-    Console.WriteLine($"[OK  ] Running inside a Docker container ({detection.Signal})");
+bool isDocker;
+string detectionSignal;
+
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
+    var wd = WindowsDockerDetector.Detect();
+    isDocker = wd.IsDocker;
+    detectionSignal = wd.Signal;
+}
 else
-    Console.WriteLine($"[WARN] NOT running inside a Docker container ({detection.Signal})");
+{
+    var ld = DockerDetector.Detect();
+    isDocker = ld.IsDocker;
+    detectionSignal = ld.Signal;
+}
+
+if (isDocker)
+    Console.WriteLine($"[OK  ] Running inside a Docker container ({detectionSignal})");
+else
+    Console.WriteLine($"[WARN] NOT running inside a Docker container ({detectionSignal})");
 Console.WriteLine("      Device ID will only be host-unique when running in Docker.");
 Console.WriteLine();
 
