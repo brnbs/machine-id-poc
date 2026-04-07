@@ -79,3 +79,56 @@ All 3 containers must print the same `DEVICE_ID`.
 - On **bare-metal Linux** the DMI components (`ProductUuid`, `BoardSerial`) will also show `[OK]`, giving additional host entropy on top of the gateway MAC.
 - On **Docker Desktop** (Mac/Windows) the Linux VM abstracts the SMBIOS layer, so only the gateway MAC and CPU info contribute. The docker0 bridge MAC is still unique per Docker Desktop installation.
 - If you restart Docker Desktop, the docker0 bridge MAC may change (it's regenerated on daemon start). This is expected — the ID ties to the running Docker daemon's bridge, not to hardware.
+
+## Running outside Docker (diagnostic / development)
+
+You can run the app directly with the .NET SDK — no Docker required. This is useful for verifying that the container detection warning fires correctly.
+
+**Requires:** [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+
+```bash
+cd MachineIdPoc
+dotnet run
+```
+
+### Expected output on macOS
+
+```
+=== Machine ID PoC ===
+Container hostname : your-hostname
+
+[WARN] NOT running inside a Docker container (no container signals found)
+      Device ID will only be host-unique when running in Docker.
+
+--- Component diagnostics ---
+  [MISS] ProductUuid   (DMI) : (unavailable)
+  [MISS] BoardSerial   (DMI) : (unavailable)
+  [MISS] GatewayMAC    (ARP) : (unavailable)
+  [OK  ] CpuInfo    (sample) : (unavailable)
+
+--- Final Device ID ---
+DEVICE_ID=<hash of empty strings — not host-unique>
+```
+
+All components show `[MISS]` because `/proc`, `/sys/class/dmi/id`, and `/proc/net/arp` don't exist on macOS. The Device ID is still produced (it's a hash of empty component values) but is **not host-unique** — every macOS machine returns the same value in this case.
+
+### Expected output on bare-metal Linux (outside Docker)
+
+```
+=== Machine ID PoC ===
+Container hostname : your-hostname
+
+[WARN] NOT running inside a Docker container (no container signals found)
+      Device ID will only be host-unique when running in Docker.
+
+--- Component diagnostics ---
+  [OK  ] ProductUuid   (DMI) : <smbios-uuid>        # if run as root
+  [OK  ] BoardSerial   (DMI) : <board-serial>        # if run as root
+  [OK  ] GatewayMAC    (ARP) : <router-mac>          # your network router, not docker0
+  [OK  ] CpuInfo    (sample) : <cpu-vendor>, <cpu-model>
+
+--- Final Device ID ---
+DEVICE_ID=<hash>
+```
+
+> Note: `GatewayMAC` resolves your **physical router's** MAC address when run outside Docker, not the docker0 bridge. Machines on the same LAN share the same router MAC — so the ID is **less unique** than the Docker version. The DMI signals (`ProductUuid`, `BoardSerial`) compensate when available, but require running as root.
