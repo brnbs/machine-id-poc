@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 
@@ -20,13 +19,19 @@ namespace MachineIdPoc;
 ///                                   Docker installed), cexecsvc is launched programmatically
 ///                                   by HCS — it is NOT registered as a persistent SCM service
 ///                                   in the host registry.
+///                                   NOTE: Only fires for process-isolated containers (HCS
+///                                   Silo). Hyper-V isolated containers (e.g. AWS Fargate)
+///                                   run inside a Utility VM — no Silo is created, so this
+///                                   key is absent.
 ///
-///   2. Job Object KILL_ON_JOB_CLOSE — Windows containers run all processes inside a Job
-///                                   Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE set.
-///                                   This P/Invoke signal queries the current process's
-///                                   Job Object limits and checks for this flag combination.
-///                                   While other software also uses Job Objects, the
-///                                   container-specific combination of flags is distinctive.
+///   2. Control\Containers registry key — HKLM\SYSTEM\CurrentControlSet\Control\Containers
+///                                   is baked into every Windows container base image
+///                                   (Server Core, Nano Server) by Microsoft. It is absent
+///                                   on bare-metal Windows Server hosts regardless of
+///                                   Docker being installed. Unlike cexecsvc it is present
+///                                   in BOTH process-isolated and Hyper-V isolated containers
+///                                   because it lives in the container image's own registry
+///                                   hive, not in an HCS-managed Silo.
 ///
 /// NOTE: C:\.dockerenv is NOT created by Docker for Windows containers — that file only
 /// exists in Linux containers. The equivalent Windows signal is the cexecsvc registry key.
@@ -36,50 +41,13 @@ public static class WindowsDockerDetector
 {
     public record DetectionResult(bool IsDocker, string Signal);
 
-    // Job Object constants
-    private const int JobObjectBasicLimitInformation = 2;
-    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
-    {
-        public long PerProcessUserTimeLimit;
-        public long PerJobUserTimeLimit;
-        public uint LimitFlags;
-        public nuint MinimumWorkingSetSize;
-        public nuint MaximumWorkingSetSize;
-        public uint ActiveProcessLimit;
-        public nuint Affinity;
-        public uint PriorityClass;
-        public uint SchedulingClass;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool IsProcessInJob(
-        IntPtr hProcess,
-        IntPtr hJob,
-        out bool result);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool QueryInformationJobObject(
-        IntPtr hJob,
-        int jobObjectInfoClass,
-        out JOBOBJECT_BASIC_LIMIT_INFORMATION lpJobObjectInfo,
-        uint cbJobObjectInfoLength,
-        out uint lpReturnLength);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetCurrentProcess();
-
     /// <summary>
     /// Checks two independent signals. Returns on the first positive match.
     /// </summary>
     public static DetectionResult Detect()
     {
-        // ── Signal 1: cexecsvc registry key ───────────────────────────────────
-        // The Container Execution Agent Service key is present in the isolated
-        // registry overlay of every Windows container, but NOT on the bare-metal
-        // host registry (even with Docker installed).
+        // Signal 1: cexecsvc registry key — present in the isolated registry of every
+        // process-isolated Windows container, absent on bare-metal hosts.
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(
@@ -88,29 +56,20 @@ public static class WindowsDockerDetector
             if (key != null)
                 return new DetectionResult(true, "cexecsvc service registry key present");
         }
-        catch { /* registry access failure — skip */ }
+        catch { /* registry access failure */ }
 
-        // ── Signal 2: Job Object KILL_ON_JOB_CLOSE flag ───────────────────────
-        // Windows containers assign processes to a Job Object with the
-        // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE flag set, ensuring all container
-        // processes are terminated when Docker removes the container.
+        // Signal 4: Control\Containers registry key — baked into every Windows container
+        // base image by Microsoft. Absent on bare-metal hosts. Covers both process-isolated
+        // and Hyper-V isolated (Fargate) containers.
         try
         {
-            if (IsProcessInJob(GetCurrentProcess(), IntPtr.Zero, out bool inJob) && inJob)
-            {
-                if (QueryInformationJobObject(
-                    IntPtr.Zero,
-                    JobObjectBasicLimitInformation,
-                    out JOBOBJECT_BASIC_LIMIT_INFORMATION info,
-                    (uint)Marshal.SizeOf<JOBOBJECT_BASIC_LIMIT_INFORMATION>(),
-                    out _))
-                {
-                    if ((info.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) != 0)
-                        return new DetectionResult(true, "Job Object has KILL_ON_JOB_CLOSE flag (container Job Object)");
-                }
-            }
+            using var containersKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Containers",
+                writable: false);
+            if (containersKey != null)
+                return new DetectionResult(true, @"HKLM\…\Control\Containers registry key present");
         }
-        catch { /* P/Invoke failure — skip */ }
+        catch { /* registry access failure */ }
 
         return new DetectionResult(false, "no Windows container signals found");
     }
